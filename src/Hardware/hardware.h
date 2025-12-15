@@ -4,6 +4,8 @@
 #define TFT_CS 32
 #define TFT_LITE 15
 
+#define TFT_RST -1
+
 #define MENU_PIN 27
 #define SD_CS 5
 #define VBATPIN A13

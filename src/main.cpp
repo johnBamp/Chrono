@@ -1,15 +1,24 @@
-#include <Arduino.h>
-#include "Hardware/hardware.h"
+#include "Arduino.h"
+#include <SPI.h>
 
+#include "Firmware/Screen/screen.h"
 
-//No software or app should be able to acess the screen directly, only through the canvas object and telling it to draw to the screen.
-//Same goes for all other sensors.
+Screen tft;
 
 void setup() {
+  Serial.begin(115200);
+
+  SPI.begin();
+  tft.init();
+
+  tft.tftFillRect(0, 0, 320, 240, 0x0000);
+
+  tft.tftDrawRect(0, 0, 100, 100, tft.RGB565(255, 0, 0));
+  
+
 
 }
 
 void loop() {
 
 }
-
