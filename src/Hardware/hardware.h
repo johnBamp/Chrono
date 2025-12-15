@@ -1,25 +1,35 @@
 #pragma once
+#include <Arduino.h>
+#include <driver/i2s.h>  // for i2s_port_t / I2S_NUM_0 on ESP32 (optional but nice)
 
-#define TFT_DC 14
-#define TFT_CS 32
-#define TFT_LITE 15
+namespace hw {
+    constexpr int NC = -1;   // Not connected
 
-#define TFT_RST -1
+    // ---- TFT ----
+    constexpr int TFT_DC   = 14;
+    constexpr int TFT_CS   = 32;
+    constexpr int TFT_LITE = 15;
+    constexpr int TFT_RST  = NC;
 
-#define MENU_PIN 27
-#define SD_CS 5
-#define VBATPIN A13
-#define VBUS_SENSE_PIN -1
-// Route the board's VBUS pad (5V) through a small divider (e.g., 100k/100k) to GPIO x (input-only)
+    // ---- UI / misc ----
+    constexpr int MENU_PIN = 27;
+    constexpr int SD_CS    = 5;
 
-#define SPEAKER_PIN 33 //A9
+    // ---- Power sense ----
+    constexpr int VBATPIN        = A13;
+    constexpr int VBUS_SENSE_PIN = NC;
 
-#define BUF_LEN 2048
-#define SAMPLE_RATE 44100
-#define I2S_PORT I2S_NUM_0
+    // ---- Audio ----
+    constexpr int SPEAKER_PIN = 33;
 
-#define DATA_PIN 26  // A0 on Feather ESP32 V2
-#define BCLK_PIN 12  // GPIO12
-#define WS_PIN 25    // A1 on Feather ESP32 V2
+    constexpr size_t BUF_LEN      = 2048;
+    constexpr uint32_t SAMPLE_RATE = 44100;
 
-#define I2S_PORT I2S_NUM_0
+    constexpr i2s_port_t I2S_PORT = I2S_NUM_0;
+
+    // I2S pins
+    constexpr int DATA_PIN = 26;
+    constexpr int BCLK_PIN = 12;
+    constexpr int WS_PIN   = 25;
+
+} // namespace hw
