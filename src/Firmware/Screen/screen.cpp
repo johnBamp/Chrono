@@ -1,5 +1,6 @@
 #include "screen.h"
 #include <SPI.h>
+#include <cstdint>
 
 #if defined(ESP32)
   #include "esp_heap_caps.h"
@@ -25,6 +26,25 @@ namespace {
   inline void tftDeselect() { digitalWrite(hw::TFT_CS, HIGH); }
 
   inline uint16_t bswap16(uint16_t v) { return (uint16_t)((v << 8) | (v >> 8)); }
+
+  inline void memfill16(uint16_t* dst, uint16_t value, size_t count) {
+    if (!dst || count == 0) return;
+    const uint32_t pattern32 = ((uint32_t)value << 16) | value;
+
+    // Align to 32-bit boundary if needed
+    if ((reinterpret_cast<uintptr_t>(dst) & 0x2) && count) {
+      *dst++ = value;
+      count--;
+    }
+
+    // Fill 32-bit chunks for throughput
+    uint32_t* d32 = reinterpret_cast<uint32_t*>(dst);
+    size_t blocks = count / 2;
+    for (size_t i = 0; i < blocks; i++) d32[i] = pattern32;
+
+    // Odd tail
+    if (count & 1) dst[count - 1] = value;
+  }
 }
 
 uint16_t Screen::RGB565(uint8_t r, uint8_t g, uint8_t b) {
@@ -77,8 +97,7 @@ void Screen::tftDataN(const uint8_t* data, size_t n) {
 }
 
 void Screen::tftSetAddrWindow(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1) {
-  startWrite();
-
+  // Assumes caller already called startWrite() to keep a single SPI transaction open.
   dcCommand();
   write8((uint8_t)Cmd::CASET);
   dcData();
@@ -93,18 +112,14 @@ void Screen::tftSetAddrWindow(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1
 
   dcCommand();
   write8((uint8_t)Cmd::RAMWR);
-
-  endWrite();
 }
 
 void Screen::pushRect565Wire(const uint16_t* wirePixels,
                              uint16_t x, uint16_t y, uint16_t w, uint16_t h) {
   if (!wirePixels || w == 0 || h == 0) return;
 
-  tftSetAddrWindow(x, y, (uint16_t)(x + w - 1), (uint16_t)(y + h - 1));
-
-  // Now stream pixel data
   startWrite();
+  tftSetAddrWindow(x, y, (uint16_t)(x + w - 1), (uint16_t)(y + h - 1));
   dcData();
   writeBytes((const uint8_t*)wirePixels, (size_t)w * (size_t)h * 2);
   endWrite();
@@ -187,6 +202,7 @@ bool Canvas565::begin(Screen& screen) {
   screen_ = &screen;
   w_ = Screen::width();
   h_ = Screen::height();
+  resetDirty();
 
   const size_t bytes = (size_t)w_ * (size_t)h_ * 2;
   buf_ = allocFB(bytes);
@@ -211,13 +227,15 @@ void Canvas565::end() {
   buf_ = nullptr;
   screen_ = nullptr;
   w_ = h_ = 0;
+  resetDirty();
 }
 
 void Canvas565::clear(uint16_t color) {
   if (!buf_) return;
   const uint16_t wire = bswap16(color);
   const uint32_t n = (uint32_t)w_ * (uint32_t)h_;
-  for (uint32_t i = 0; i < n; i++) buf_[i] = wire;
+  memfill16(buf_, wire, n);
+  markDirty(0, 0, (int16_t)w_, (int16_t)h_);
 }
 
 void Canvas565::fillRect(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color) {
@@ -235,8 +253,9 @@ void Canvas565::fillRect(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t co
 
   for (int16_t row = 0; row < h; row++) {
     uint16_t* dst = buf_ + (y + row) * stride + x;
-    for (int16_t col = 0; col < w; col++) dst[col] = wire;
+    memfill16(dst, wire, (size_t)w);
   }
+  markDirty(x, y, w, h);
 }
 
 void Canvas565::drawRect(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color) {
@@ -248,8 +267,37 @@ void Canvas565::drawRect(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t co
 }
 
 void Canvas565::present() {
-  if (!buf_ || !screen_) return;
-  screen_->pushRect565Wire(buf_, 0, 0, w_, h_);
+  if (!buf_ || !screen_ || !hasDirty()) return;
+
+  const int16_t x = dirtyX0_;
+  const int16_t y = dirtyY0_;
+  const int16_t w = (int16_t)(dirtyX1_ - dirtyX0_ + 1);
+  const int16_t h = (int16_t)(dirtyY1_ - dirtyY0_ + 1);
+
+  // Fast path: full-screen dirty region is contiguous, so push in one burst.
+  if (x == 0 && y == 0 && w == (int16_t)w_ && h == (int16_t)h_) {
+    screen_->pushRect565Wire(buf_, 0, 0, w_, h_);
+  } else {
+    // Partial: keep single transaction, stream rows.
+    screen_->startWrite();
+    screen_->tftSetAddrWindow((uint16_t)x, (uint16_t)y,
+                              (uint16_t)(x + w - 1), (uint16_t)(y + h - 1));
+    screen_->dcData();
+
+    const int16_t stride = (int16_t)w_;
+    if (x == 0 && w == stride) {
+      const uint16_t* src = buf_ + y * stride;
+      screen_->writeBytes((const uint8_t*)src, (size_t)w * (size_t)h * 2);
+    } else {
+      for (int16_t row = 0; row < h; row++) {
+        const uint16_t* src = buf_ + (y + row) * stride + x;
+        screen_->writeBytes((const uint8_t*)src, (size_t)w * 2);
+      }
+    }
+    screen_->endWrite();
+  }
+
+  resetDirty();
 }
 
 void Canvas565::presentRect(int16_t x, int16_t y, int16_t w, int16_t h) {
@@ -263,10 +311,9 @@ void Canvas565::presentRect(int16_t x, int16_t y, int16_t w, int16_t h) {
   if (w <= 0 || h <= 0) return;
 
   // Push row-by-row (since rect isn't contiguous as one block in memory unless full-width)
+  screen_->startWrite();
   screen_->tftSetAddrWindow((uint16_t)x, (uint16_t)y,
                             (uint16_t)(x + w - 1), (uint16_t)(y + h - 1));
-
-  screen_->startWrite();
   screen_->dcData();
 
   const int16_t stride = (int16_t)w_;
@@ -276,4 +323,20 @@ void Canvas565::presentRect(int16_t x, int16_t y, int16_t w, int16_t h) {
   }
 
   screen_->endWrite();
+}
+
+void Canvas565::markDirty(int16_t x, int16_t y, int16_t w, int16_t h) {
+  if (w <= 0 || h <= 0) return;
+  if (dirtyX0_ > dirtyX1_) {
+    dirtyX0_ = x;
+    dirtyY0_ = y;
+    dirtyX1_ = (int16_t)(x + w - 1);
+    dirtyY1_ = (int16_t)(y + h - 1);
+    return;
+  }
+
+  dirtyX0_ = min(dirtyX0_, x);
+  dirtyY0_ = min(dirtyY0_, y);
+  dirtyX1_ = max(dirtyX1_, (int16_t)(x + w - 1));
+  dirtyY1_ = max(dirtyY1_, (int16_t)(y + h - 1));
 }

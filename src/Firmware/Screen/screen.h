@@ -29,10 +29,19 @@ public:
   uint16_t* data() { return buf_; }
 
 private:
+  void markDirty(int16_t x, int16_t y, int16_t w, int16_t h);
+  bool hasDirty() const { return dirtyX0_ <= dirtyX1_ && dirtyY0_ <= dirtyY1_; }
+  void resetDirty() { dirtyX0_ = w_; dirtyY0_ = h_; dirtyX1_ = -1; dirtyY1_ = -1; }
+
   Screen* screen_ = nullptr;
   uint16_t* buf_ = nullptr;  // stored byte-swapped for fast SPI
   uint16_t w_ = 0;
   uint16_t h_ = 0;
+
+  int16_t dirtyX0_ = 0;
+  int16_t dirtyY0_ = 0;
+  int16_t dirtyX1_ = -1;
+  int16_t dirtyY1_ = -1;
 };
 
 // Low-level screen driver (ILI9341 over SPI).
@@ -67,5 +76,6 @@ private:
   void tftData8(uint8_t d);
   void tftDataN(const uint8_t* data, size_t n);
 
+  // Caller must hold an active SPI transaction via startWrite()/endWrite().
   void tftSetAddrWindow(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1);
 };
